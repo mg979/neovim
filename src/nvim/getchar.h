@@ -33,6 +33,7 @@ typedef enum {
 /// @see mapblock_T
 struct map_arguments {
   bool buffer;
+  bool multi;
   bool expr;
   bool noremap;
   bool nowait;

@@ -110,6 +110,7 @@ static int block_redo = FALSE;
 // Each mapping is put in one of the MAX_MAPHASH hash lists,
 // to speed up finding it.
 static mapblock_T *(maphash[MAX_MAPHASH]);
+static mapblock_T *(m_maphash[MAX_MAPHASH]);
 static bool maphash_valid = false;
 
 /*
@@ -1648,9 +1649,12 @@ static int vgetorpeek(bool advance)
   int c, c1;
   int keylen;
   char_u      *s;
-  mapblock_T  *mp;
-  mapblock_T  *mp2;
+  mapblock_T  *mp;         // currently processed mapping
+  mapblock_T  *mpg;        // global mappings
+  mapblock_T  *mpb;        // <buffer> mappings
+  mapblock_T  *mpm;        // <multi> mappings
   mapblock_T  *mp_match;
+  int tables_left;        // tables to process
   int mp_match_len = 0;
   int timedout = FALSE;                     /* waited for more than 1 second
                                                 for mapping to complete */
@@ -1768,8 +1772,7 @@ static int vgetorpeek(bool advance)
            * - maphash_valid not set: no mappings present.
            * - typebuf.tb_buf[typebuf.tb_off] should not be remapped
            * - in insert or cmdline mode and 'paste' option set
-           * - waiting for "hit return to continue" and CR or SPACE
-           *	 typed
+           * - waiting for "hit return to continue" and CR or SPACE typed
            * - waiting for a char with --more--
            * - in Ctrl-X mode, and we get a valid char for that mode
            */
@@ -1797,14 +1800,34 @@ static int vgetorpeek(bool advance)
                              && get_real_state() != SELECTMODE);
               nolmaplen = 0;
             }
-            /* First try buffer-local mappings. */
-            mp = curbuf->b_maphash[MAP_HASH(local_State, c1)];
-            mp2 = maphash[MAP_HASH(local_State, c1)];
-            if (mp == NULL) {
-              /* There are no buffer-local mappings. */
-              mp = mp2;
-              mp2 = NULL;
+
+            /* Try <multi>, then <buffer>, then global mappings. */
+            mpm = m_maphash[MAP_HASH(local_State, c1)];
+            mpb = curbuf->b_maphash[MAP_HASH(local_State, c1)];
+            mpg = maphash[MAP_HASH(local_State, c1)];
+
+            // TODO: this variable would only be true while multiple cursors
+            // are enabled: in this case (and only in this case), mappings
+            // registered with the <multi> property are evaluated, and have
+            // precedence even over buffer-local mappings. They aren't
+            // buffer-local themselves, in the sense that there cannot be
+            // different <multi> mappings in different buffers, so the mapping
+            // is looked up in a global table (m_maphash)
+            bool is_multi = true;
+
+            if ( is_multi && mpm != NULL ) { // start with <multi> mappings
+               mp = mpm;
+               tables_left = 3;
             }
+            else if ( mpb != NULL ) {        // or with <buffer> mappings
+               mp = mpb;
+               tables_left = 2;
+            }
+            else {                           // finish with global mappings
+               mp = mpg;
+               tables_left = 1;
+            }
+
             /*
              * Loop until a partly matching mapping is found or
              * all (local) mappings have been checked.
@@ -1815,8 +1838,9 @@ static int vgetorpeek(bool advance)
             mp_match = NULL;
             mp_match_len = 0;
             for (; mp != NULL;
-                 mp->m_next == NULL ? (mp = mp2, mp2 = NULL) :
-                 (mp = mp->m_next)) {
+                  mp = mp->m_next != NULL ? mp->m_next : (
+                     !--tables_left ? NULL : tables_left == 2 ? mpb : mpg
+                     )) {
               /*
                * Only consider an entry if the first character
                * matches and it is for the current state.
@@ -2621,12 +2645,18 @@ int str_to_mapargs(const char_u *strargs, bool is_unmap, MapArguments *mapargs)
   MapArguments parsed_args;  // copy these into mapargs "all at once" when done
   memset(&parsed_args, 0, sizeof(parsed_args));
 
-  // Accept <buffer>, <nowait>, <silent>, <expr>, <script>, and <unique> in
-  // any order.
+  // Accept <buffer>, <multi>, <nowait>, <silent>, <expr>, <script>, and
+  // <unique> in any order.
   while (true) {
     if (STRNCMP(to_parse, "<buffer>", 8) == 0) {
       to_parse = skipwhite(to_parse + 8);
       parsed_args.buffer = true;
+      continue;
+    }
+
+    if (STRNCMP(to_parse, "<multi>", 7) == 0) {
+      to_parse = skipwhite(to_parse + 7);
+      parsed_args.multi = true;
       continue;
     }
 
@@ -2713,6 +2743,34 @@ int str_to_mapargs(const char_u *strargs, bool is_unmap, MapArguments *mapargs)
   return 0;
 }
 
+/// Selects the mappings/abbreviations table to be used, among multi-, buffer-
+/// global one.
+///
+/// @param args      @see do_map
+/// @param buf       @see buf_do_map
+/// @param abt       pointer to the abbreviations table
+/// @param mpt       pointer to the mappings table
+void get_maptables(
+      MapArguments *args, buf_T *buf, mapblock_T  ***abt, mapblock_T  ***mpt)
+{
+   *mpt = maphash;
+   *abt = &first_abbr;
+
+   if (args->buffer) {
+      // If <buffer> was given, we'll be searching through the buffer's
+      // mappings/abbreviations, not the globals.
+      *mpt = buf->b_maphash;
+      *abt = &buf->b_first_abbr;
+   }
+
+   if (args->multi) {
+      // If <multi> was given, we'll be using a different mappings table
+      *mpt = m_maphash;
+   }
+
+   validate_maphash();
+}
+
 /// Sets or removes a mapping or abbreviation in buffer `buf`.
 ///
 /// @param maptype    @see do_map
@@ -2740,30 +2798,20 @@ int buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbrev,
   mapblock_T  **map_table;
   int noremap;
 
-  map_table = maphash;
-  abbr_table = &first_abbr;
+  get_maptables(args, buf, &abbr_table, &map_table);
 
   // For ":noremap" don't remap, otherwise do remap.
-  if (maptype == 2) {
-    noremap = REMAP_NONE;
-  } else {
-    noremap = REMAP_YES;
-  }
+  noremap = (maptype == 2) ? REMAP_NONE : REMAP_YES;
 
-  if (args->buffer) {
-    // If <buffer> was given, we'll be searching through the buffer's
-    // mappings/abbreviations, not the globals.
-    map_table = buf->b_maphash;
-    abbr_table = &buf->b_first_abbr;
-  }
   if (args->script) {
     noremap = REMAP_SCRIPT;
   }
 
-  validate_maphash();
-
   bool has_lhs = (args->lhs[0] != NUL);
   bool has_rhs = (args->rhs[0] != NUL) || args->rhs_is_noop;
+
+  bool local = args->buffer;
+  bool multi = args->multi;
 
   // check for :unmap without argument
   if (maptype == 1 && !has_lhs) {
@@ -2837,7 +2885,7 @@ int buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbrev,
   }
 
   // Check if a new local mapping wasn't already defined globally.
-  if (map_table == buf->b_maphash && has_lhs && has_rhs && maptype != 1) {
+  if (local && has_lhs && has_rhs && maptype != 1) {
     // need to loop over all global hash lists
     for (hash = 0; hash < 256 && !got_int; hash++) {
       if (is_abbrev) {
@@ -2868,7 +2916,7 @@ int buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbrev,
   }
 
   // When listing global mappings, also list buffer-local ones here.
-  if (map_table != buf->b_maphash && !has_rhs && maptype != 1) {
+  if (!local && !multi && !has_rhs && maptype != 1) {
     // need to loop over all global hash lists
     for (hash = 0; hash < 256 && !got_int; hash++) {
       if (is_abbrev) {
@@ -2883,12 +2931,12 @@ int buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbrev,
         // check entries with the same mode
         if ((mp->m_mode & mode) != 0) {
           if (!has_lhs) {  // show all entries
-            showmap(mp, true);
+            showmap(mp, true, false);
             did_local = true;
           } else {
             n = mp->m_keylen;
             if (STRNCMP(mp->m_keys, lhs, (size_t)(n < len ? n : len)) == 0) {
-              showmap(mp, true);
+              showmap(mp, true, false);
               did_local = true;
             }
           }
@@ -2921,7 +2969,7 @@ int buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbrev,
           continue;
         }
         if (!has_lhs) {                      // show all entries
-          showmap(mp, map_table != maphash);
+          showmap(mp, local, multi);
           did_it = true;
         } else {                          // do we have a match?
           if (round) {              // second round: Try unmap "rhs" string
@@ -2947,7 +2995,7 @@ int buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbrev,
               mp->m_mode &= ~mode;
               did_it = true;  // remember we did something
             } else if (!has_rhs) {  // show matching entry
-              showmap(mp, map_table != maphash);
+              showmap(mp, local, multi);
               did_it = true;
             } else if (n != len) {  // new entry is ambiguous
               mpp = &(mp->m_next);
@@ -3039,6 +3087,7 @@ int buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbrev,
     }
   }
 
+  // create the mapping entry
   mp->m_keys = vim_strsave(lhs);
   mp->m_str = vim_strsave(rhs);
   mp->m_orig_str = vim_strsave(orig_rhs);
@@ -3159,6 +3208,7 @@ static void validate_maphash(void)
 {
   if (!maphash_valid) {
     memset(maphash, 0, sizeof(maphash));
+    memset(m_maphash, 0, sizeof(m_maphash));
     maphash_valid = TRUE;
   }
 }
@@ -3212,6 +3262,7 @@ void map_clear_mode(char_u *cmdp, char_u *arg, int forceit, int abbr)
 {
   int mode;
   int local;
+  int multi;
 
   local = (STRCMP(arg, "<buffer>") == 0);
   if (!local && *arg != NUL) {
@@ -3219,10 +3270,14 @@ void map_clear_mode(char_u *cmdp, char_u *arg, int forceit, int abbr)
     return;
   }
 
+  multi = (STRCMP(arg, "<multi>") == 0);
+  if (!multi && *arg != NUL) {
+    EMSG(_(e_invarg));
+    return;
+  }
+
   mode = get_map_mode(&cmdp, forceit);
-  map_clear_int(curbuf, mode,
-      local,
-      abbr);
+  map_clear_int(curbuf, mode, local, multi, abbr);
 }
 
 /*
@@ -3233,6 +3288,7 @@ map_clear_int (
     buf_T *buf,        /* buffer for local mappings */
     int mode,                       /* mode in which to delete */
     int local,               /* TRUE for buffer-local mappings */
+    int multi,               /* TRUE for <multi> mappings */
     int abbr                       /* TRUE for abbreviations */
 )
 {
@@ -3253,6 +3309,8 @@ map_clear_int (
     } else {
       if (local)
         mpp = &buf->b_maphash[hash];
+      else if (multi)
+        mpp = &m_maphash[hash];
       else
         mpp = &maphash[hash];
     }
@@ -3273,6 +3331,9 @@ map_clear_int (
           if (local) {
             mp->m_next = buf->b_maphash[new_hash];
             buf->b_maphash[new_hash] = mp;
+          } else if (multi) {
+            mp->m_next = m_maphash[new_hash];
+            m_maphash[new_hash] = mp;
           } else {
             mp->m_next = maphash[new_hash];
             maphash[new_hash] = mp;
@@ -3335,7 +3396,8 @@ char *map_mode_to_chars(int mode)
 static void 
 showmap (
     mapblock_T *mp,
-    int local                  /* TRUE for buffer-local map */
+    int local,                 /* TRUE for buffer-local map */
+    int multi                  /* TRUE for <multi> map */
 )
 {
   size_t len = 1;
@@ -3375,7 +3437,9 @@ showmap (
     msg_putchar(' ');
   }
 
-  if (local)
+  if (multi)
+    msg_putchar('#');
+  else if (local)
     msg_putchar('@');
   else
     msg_putchar(' ');
@@ -3499,6 +3563,7 @@ int map_to_exists_mode(const char *const rhs, const int mode, const bool abbr)
 static int expand_mapmodes = 0;
 static int expand_isabbrev = 0;
 static int expand_buffer = FALSE;
+static int expand_multi = FALSE;
 
 /*
  * Work out what to complete when doing command line completion of mapping
@@ -3527,11 +3592,15 @@ set_context_in_map_cmd (
     }
     expand_isabbrev = isabbrev;
     xp->xp_context = EXPAND_MAPPINGS;
-    expand_buffer = FALSE;
     for (;; ) {
       if (STRNCMP(arg, "<buffer>", 8) == 0) {
         expand_buffer = TRUE;
         arg = skipwhite(arg + 8);
+        continue;
+      }
+      if (STRNCMP(arg, "<multi>", 7) == 0) {
+        expand_multi = TRUE;
+        arg = skipwhite(arg + 7);
         continue;
       }
       if (STRNCMP(arg, "<unique>", 8) == 0) {
@@ -3590,7 +3659,7 @@ int ExpandMappings(regmatch_T *regmatch, int *num_file, char_u ***file)
   for (round = 1; round <= 2; ++round) {
     count = 0;
 
-    for (i = 0; i < 7; i++) {
+    for (i = 0; i < 8; i++) {
       if (i == 0) {
         p = (char_u *)"<silent>";
       } else if (i == 1) {
@@ -3605,6 +3674,8 @@ int ExpandMappings(regmatch_T *regmatch, int *num_file, char_u ***file)
         p = (char_u *)"<nowait>";
       } else if (i == 6) {
         p = (char_u *)"<special>";
+      } else if (i == 7 && !expand_multi) {
+        p = (char_u *)"<multi>";
       } else {
         continue;
       }
@@ -3622,8 +3693,11 @@ int ExpandMappings(regmatch_T *regmatch, int *num_file, char_u ***file)
         if (hash > 0)           /* only one abbrev list */
           break;           /* for (hash) */
         mp = first_abbr;
-      } else if (expand_buffer)
+      }
+      else if (expand_buffer)
         mp = curbuf->b_maphash[hash];
+      else if (expand_multi)
+        mp = m_maphash[hash];
       else
         mp = maphash[hash];
       for (; mp; mp = mp->m_next) {
