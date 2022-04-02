@@ -34,6 +34,7 @@
 #include "nvim/keymap.h"
 #include "nvim/lua/executor.h"
 #include "nvim/main.h"
+#include "nvim/maphash.h"
 #include "nvim/mbyte.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
@@ -47,6 +48,7 @@
 #include "nvim/os/os.h"
 #include "nvim/plines.h"
 #include "nvim/regexp.h"
+#include "nvim/scopes.h"
 #include "nvim/screen.h"
 #include "nvim/state.h"
 #include "nvim/strings.h"
@@ -101,11 +103,6 @@ static int block_redo = FALSE;
                  c1) (((mode) & \
                        (NORMAL + VISUAL + SELECTMODE + \
                         OP_PENDING + TERM_FOCUS)) ? (c1) : ((c1) ^ 0x80))
-
-// Each mapping is put in one of the MAX_MAPHASH hash lists,
-// to speed up finding it.
-static mapblock_T *(maphash[MAX_MAPHASH]);
-static bool maphash_valid = false;
 
 /*
  * List used for abbreviations.
@@ -1723,6 +1720,8 @@ static int handle_mapping(int *keylenp, bool *timedout, int *mapdepth)
   int local_State = get_real_state();
   bool is_plug_map = false;
 
+  contexts_initialize();
+
   // If typehead starts with <Plug> then remap, even for a "noremap" mapping.
   if (typebuf.tb_buf[typebuf.tb_off] == K_SPECIAL
       && typebuf.tb_buf[typebuf.tb_off + 1] == KS_EXTRA
@@ -1735,14 +1734,13 @@ static int handle_mapping(int *keylenp, bool *timedout, int *mapdepth)
   //
   // Don't look for mappings if:
   // - no_mapping set: mapping disabled (e.g. for CTRL-V)
-  // - maphash_valid not set: no mappings present.
   // - typebuf.tb_buf[typebuf.tb_off] should not be remapped
   // - in insert or cmdline mode and 'paste' option set
   // - waiting for "hit return to continue" and CR or SPACE typed
   // - waiting for a char with --more--
   // - in Ctrl-X mode, and we get a valid char for that mode
   tb_c1 = typebuf.tb_buf[typebuf.tb_off];
-  if (no_mapping == 0 && maphash_valid
+  if (no_mapping == 0
       && (no_zero_mapping == 0 || tb_c1 != '0')
       && (typebuf.tb_maplen == 0 || is_plug_map
           || (p_remap
@@ -2849,7 +2847,7 @@ int str_to_mapargs(const char_u *strargs, bool is_unmap, MapArguments *mapargs)
 /// @param mode       @see do_map
 /// @param is_abbrev  @see do_map
 /// @param buf        Target Buffer
-int buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbrev, buf_T *buf)
+DoMapResult  buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbrev, buf_T *buf)
 {
   mapblock_T *mp, **mpp;
   char_u *p;
@@ -2885,7 +2883,7 @@ int buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbrev, buf_T 
     noremap = REMAP_SCRIPT;
   }
 
-  validate_maphash();
+  contexts_initialize();
 
   bool has_lhs = (args->lhs[0] != NUL);
   bool has_rhs = args->rhs_lua != LUA_NOREF || (args->rhs[0] != NUL) || args->rhs_is_noop;
@@ -3241,15 +3239,14 @@ theend:
 ///         - 4 for out of mem (deprecated, WON'T HAPPEN)
 ///         - 5 for entry not unique
 ///
-int do_map(int maptype, char_u *arg, int mode, bool is_abbrev)
+DoMapResult do_map(int maptype, char_u *arg, int mode, bool is_abbrev)
 {
   MapArguments parsed_args;
   int result = str_to_mapargs(arg, maptype == 1, &parsed_args);
   switch (result) {
-  case 0:
+  case DoMapResult_success:
     break;
-  case 1:
-    // invalid arguments
+  case DoMapResult_invalid_arguments:
     goto free_and_return;
   default:
     assert(false && "Unknown return code from str_to_mapargs!");
@@ -3263,35 +3260,6 @@ free_and_return:
   xfree(parsed_args.rhs);
   xfree(parsed_args.orig_rhs);
   return result;
-}
-
-/*
- * Delete one entry from the abbrlist or maphash[].
- * "mpp" is a pointer to the m_next field of the PREVIOUS entry!
- */
-static void mapblock_free(mapblock_T **mpp)
-{
-  mapblock_T *mp;
-
-  mp = *mpp;
-  xfree(mp->m_keys);
-  NLUA_CLEAR_REF(mp->m_luaref);
-  XFREE_CLEAR(mp->m_str);
-  XFREE_CLEAR(mp->m_orig_str);
-  XFREE_CLEAR(mp->m_desc);
-  *mpp = mp->m_next;
-  xfree(mp);
-}
-
-/*
- * Initialize maphash[] for first use.
- */
-static void validate_maphash(void)
-{
-  if (!maphash_valid) {
-    memset(maphash, 0, sizeof(maphash));
-    maphash_valid = TRUE;
-  }
 }
 
 /*
@@ -3369,9 +3337,9 @@ void map_clear_int(buf_T *buf, int mode, bool local, bool abbr)
   int hash;
   int new_hash;
 
-  validate_maphash();
+  contexts_initialize();
 
-  for (hash = 0; hash < 256; ++hash) {
+  for (hash = 0; hash < MAX_MAPHASH; ++hash) {
     if (abbr) {
       if (hash > 0) {           // there is only one abbrlist
         break;
@@ -3600,7 +3568,7 @@ int map_to_exists_mode(const char *const rhs, const int mode, const bool abbr)
   int hash;
   bool exp_buffer = false;
 
-  validate_maphash();
+  contexts_initialize();
 
   // Do it twice: once for global maps and once for local maps.
   for (;;) {
@@ -3714,7 +3682,7 @@ int ExpandMappings(regmatch_T *regmatch, int *num_file, char_u ***file)
   char_u *p;
   int i;
 
-  validate_maphash();
+  contexts_initialize();
 
   *num_file = 0;                    // return values in case of FAIL
   *file = NULL;
@@ -4115,7 +4083,7 @@ int makemap(FILE *fd, buf_T *buf)
   int hash;
   bool did_cpo = false;
 
-  validate_maphash();
+  contexts_initialize();
 
   // Do the loop twice: Once for mappings, once for abbreviations.
   // Then loop over all map hash lists.
@@ -4435,7 +4403,7 @@ char_u *check_map(char_u *keys, int mode, int exact, int ign_mod, int abbr, mapb
   mapblock_T *mp;
   *rhs_lua = LUA_NOREF;
 
-  validate_maphash();
+  contexts_initialize();
 
   len = (int)STRLEN(keys);
   for (int local = 1; local >= 0; local--) {

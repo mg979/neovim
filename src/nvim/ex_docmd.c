@@ -7970,11 +7970,13 @@ static void do_exmap(exarg_T *eap, int isabbrev)
 
   switch (do_map((*cmdp == 'n') ? 2 : (*cmdp == 'u'),
                  eap->arg, mode, isabbrev)) {
-  case 1:
+  case DoMapResult_invalid_arguments:
     emsg(_(e_invarg));
     break;
-  case 2:
+  case DoMapResult_no_match:
     emsg(isabbrev ? _(e_noabbr) : _(e_nomap));
+    break;
+  default:
     break;
   }
 }

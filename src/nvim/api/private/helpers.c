@@ -694,15 +694,15 @@ void modify_keymap(uint64_t channel_id, Buffer buffer, bool is_unmap, String mod
   }
 
   switch (buf_do_map(maptype_val, &parsed_args, mode_val, 0, target_buf)) {
-  case 0:
+  case DoMapResult_success:
     break;
-  case 1:
+  case DoMapResult_invalid_arguments:
     api_set_error(err, kErrorTypeException, (char *)e_invarg, 0);
     goto fail_and_free;
-  case 2:
+  case DoMapResult_no_match:
     api_set_error(err, kErrorTypeException, (char *)e_nomap, 0);
     goto fail_and_free;
-  case 5:
+  case DoMapResult_entry_is_not_unique:
     api_set_error(err, kErrorTypeException,
                   "E227: mapping already exists for %s", parsed_args.lhs);
     goto fail_and_free;
