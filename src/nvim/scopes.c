@@ -12,8 +12,6 @@ garray_T contexts;
 static int add_context(char *name, MapsContextScope scope);
 static void free_context(MapsContext *cxt);
 
-static bool initialized = false;
-
 #define CONTEXTS(id) (((MapsContext **)contexts.ga_data)[(id)])
 
 
@@ -22,8 +20,9 @@ static bool initialized = false;
  *****************************************************************************/
 
 /// Initialize default contexts.
-void contexts_initialize(void)
+void scopes_init(void)
 {
+  static bool initialized = false;
   if (initialized)
     return;
   ga_init(&contexts, sizeof(MapsContext *), GROW_SIZE);

@@ -59,6 +59,7 @@
 #include "nvim/quickfix.h"
 #include "nvim/screen.h"
 #include "nvim/shada.h"
+#include "nvim/scopes.h"
 #include "nvim/sign.h"
 #include "nvim/state.h"
 #include "nvim/strings.h"
@@ -161,6 +162,7 @@ void early_init(mparm_T *paramp)
   init_normal_cmds();   // Init the table of Normal mode commands.
   runtime_init();
   highlight_init();
+  scopes_init();
 
 #ifdef WIN32
   OSVERSIONINFO ovi;

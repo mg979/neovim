@@ -1715,8 +1715,6 @@ static int handle_mapping(int *keylenp, bool *timedout, int *mapdepth)
   int local_State = get_real_state();
   bool is_plug_map = false;
 
-  contexts_initialize();
-
   // If typehead starts with <Plug> then remap, even for a "noremap" mapping.
   if (typebuf.tb_buf[typebuf.tb_off] == K_SPECIAL
       && typebuf.tb_buf[typebuf.tb_off + 1] == KS_EXTRA
@@ -2858,8 +2856,6 @@ DoMapResult  buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbre
   mapblock_T **map_table;
   int noremap;
 
-  contexts_initialize();
-
   MapsContext *context;
   MapsContextScope scope = (MapsContextScope)args->buffer;
 
@@ -3338,8 +3334,6 @@ void map_clear_int(buf_T *buf, int mode, bool local, bool abbr)
   int hash;
   int new_hash;
 
-  contexts_initialize();
-
   for (hash = 0; hash < MAX_MAPHASH; ++hash) {
     if (abbr) {
       if (hash > 0) {           // there is only one abbrlist
@@ -3569,8 +3563,6 @@ int map_to_exists_mode(const char *const rhs, const int mode, const bool abbr)
   int hash;
   bool exp_buffer = false;
 
-  contexts_initialize();
-
   // Do it twice: once for global maps and once for local maps.
   for (;;) {
     for (hash = 0; hash < 256; hash++) {
@@ -3682,8 +3674,6 @@ int ExpandMappings(regmatch_T *regmatch, int *num_file, char_u ***file)
   int round;
   char_u *p;
   int i;
-
-  contexts_initialize();
 
   *num_file = 0;                    // return values in case of FAIL
   *file = NULL;
@@ -4084,8 +4074,6 @@ int makemap(FILE *fd, buf_T *buf)
   int hash;
   bool did_cpo = false;
 
-  contexts_initialize();
-
   // Do the loop twice: Once for mappings, once for abbreviations.
   // Then loop over all map hash lists.
   for (abbr = 0; abbr < 2; abbr++) {
@@ -4403,8 +4391,6 @@ char_u *check_map(char_u *keys, int mode, int exact, int ign_mod, int abbr, mapb
   int len, minlen;
   mapblock_T *mp;
   *rhs_lua = LUA_NOREF;
-
-  contexts_initialize();
 
   len = (int)STRLEN(keys);
   for (int local = 1; local >= 0; local--) {
