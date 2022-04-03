@@ -141,9 +141,11 @@ static int add_context(char *name, MapsContextScope scope)
   switch (scope) {
   case SCOPE_GLOBAL:
     new->mappings = maphash;
+    new->abbreviations = &first_abbr;
     break;
   case SCOPE_BUFFER:
     new->mappings = curbuf->b_maphash;
+    new->abbreviations = &curbuf->b_first_abbr;
     break;
   case SCOPE_WINDOW:
     // not implemented yet

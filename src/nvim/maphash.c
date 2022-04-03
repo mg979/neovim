@@ -1,9 +1,15 @@
 #include "maphash.h"
 #include "nvim/lua/executor.h"
 
-// Each mapping is put in one of the MAX_MAPHASH hash lists,
-// to speed up finding it.
+/**
+ * Each mapping is put in one of the hash lists, to speed up finding it.
+ */
 mapblock_T *(maphash[MAX_MAPHASH]);
+
+/*
+ * List used for abbreviations.
+ */
+mapblock_T *first_abbr = NULL;
 
 /*
  * Delete one entry from the abbrlist or maphash[].

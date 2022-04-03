@@ -9,6 +9,7 @@
 
 // Table used for global mappings.
 extern mapblock_T *(maphash[MAX_MAPHASH]);
+extern mapblock_T *first_abbr;
 
 /******************************************************************************
  * Map arguments

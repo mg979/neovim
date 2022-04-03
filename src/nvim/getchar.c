@@ -104,11 +104,6 @@ static int block_redo = FALSE;
                        (NORMAL + VISUAL + SELECTMODE + \
                         OP_PENDING + TERM_FOCUS)) ? (c1) : ((c1) ^ 0x80))
 
-/*
- * List used for abbreviations.
- */
-static mapblock_T *first_abbr = NULL;  // first entry in abbrlist
-
 static int KeyNoremap = 0;                  // remapping flags
 
 /*
@@ -2876,7 +2871,7 @@ DoMapResult  buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbre
   default:
     context = contexts_get(scope);
     map_table = context->mappings;
-    abbr_table = &first_abbr;
+    abbr_table = context->abbreviations;
     break;
   }
 

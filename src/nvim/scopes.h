@@ -48,6 +48,7 @@ typedef struct MapsContext {
   MapsContextScope scope; // Either global, buffer or window.
   MapsContextPriority priority; // By default, priority is the same as the declared scope.
   mapblock_T **mappings; // List of mappings associated to the context.
+  mapblock_T **abbreviations; // List of abbreviations associated to the context.
 } MapsContext;
 
 /// Array with currently defined scoped contexts.
