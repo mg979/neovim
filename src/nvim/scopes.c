@@ -54,6 +54,9 @@ void contexts_free(void)
 /// Get a context by its id, that corresponds to the position in ga->ga_data.
 MapsContext *contexts_get(int id)
 {
+  if (id < 0 || id >= contexts.ga_len) {
+    return NULL;
+  }
   return CONTEXTS(id);
 }
 
