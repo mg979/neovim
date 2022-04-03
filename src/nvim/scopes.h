@@ -22,6 +22,7 @@ typedef struct MapsContextKeymaps {
 /// - context.id: scopes defined later have higher precedence
 /// - context.priority: defaults to context scope, but can be different
 typedef enum {
+  SCOPE_INVALID = -1,
   SCOPE_GLOBAL = 0,
   SCOPE_BUFFER = 1,
   SCOPE_WINDOW = 2,
@@ -40,13 +41,13 @@ typedef enum {
 } MapsContextPriority;
 
 /// Structure for scoped contexts
-typedef struct scope {
+typedef struct MapsContext {
   bool enabled;
   char *name;
   int id; // incremental id, the position in scopes[]
   MapsContextScope scope; // Either global, buffer or window.
   MapsContextPriority priority; // By default, priority is the same as the declared scope.
-  mapblock_T *mappings[MAX_MAPHASH]; // List of mappings associated to the context.
+  mapblock_T **mappings; // List of mappings associated to the context.
 } MapsContext;
 
 /// Array with currently defined scoped contexts.

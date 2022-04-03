@@ -2863,8 +2863,22 @@ DoMapResult  buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbre
   mapblock_T **map_table;
   int noremap;
 
-  map_table = maphash;
-  abbr_table = &first_abbr;
+  contexts_initialize();
+
+  MapsContext *context;
+  MapsContextScope scope = (MapsContextScope)args->buffer;
+
+  switch (scope) {
+  case SCOPE_BUFFER:
+    map_table = buf->b_maphash;
+    abbr_table = &buf->b_first_abbr;
+    break;
+  default:
+    context = contexts_get(scope);
+    map_table = context->mappings;
+    abbr_table = &first_abbr;
+    break;
+  }
 
   // For ":noremap" don't remap, otherwise do remap.
   if (maptype == 2) {
@@ -2873,17 +2887,9 @@ DoMapResult  buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbre
     noremap = REMAP_YES;
   }
 
-  if (args->buffer) {
-    // If <buffer> was given, we'll be searching through the buffer's
-    // mappings/abbreviations, not the globals.
-    map_table = buf->b_maphash;
-    abbr_table = &buf->b_first_abbr;
-  }
   if (args->script) {
     noremap = REMAP_SCRIPT;
   }
-
-  contexts_initialize();
 
   bool has_lhs = (args->lhs[0] != NUL);
   bool has_rhs = args->rhs_lua != LUA_NOREF || (args->rhs[0] != NUL) || args->rhs_is_noop;
